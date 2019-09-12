@@ -14,7 +14,7 @@ There isn't any need for command line arguments. It takes the index files from i
 
 ## Step 3 : Running the Search Engine
 
-To search for queries, run the file 'search2.py'. It loads the index from 'merged_index' (both primary and secondary).
+To search for queries, run the file 'search.py'. It loads the index from 'merged_index' (both primary and secondary).
 It also uses the file 'docTitleMap.txt' to display titles corresponding to the docIDs.
 After it loads up, it gives the user a prompt to enter the query. After that the result of query is displayed. (top 10 results).
 

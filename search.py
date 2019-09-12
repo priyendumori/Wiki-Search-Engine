@@ -1,7 +1,12 @@
 import sys
 from collections import defaultdict
 from nltk.stem import PorterStemmer
+import timeit
 import re
+from bisect import bisect
+from math import log10
+from operator import itemgetter
+
 
 ps = PorterStemmer()
 
@@ -11,91 +16,52 @@ with open('stopwords.txt','r') as f:
         line= line.strip()
         stopwords[line]=1
 
-# Regular Expression to remove URLs
-regExp1 = re.compile(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+',re.DOTALL)
-# Regular Expression to remove CSS
-regExp2 = re.compile(r'{\|(.*?)\|}',re.DOTALL)
-# Regular Expression to remove {{cite **}} or {{vcite **}}
-regExp3 = re.compile(r'{{v?cite(.*?)}}',re.DOTALL)
 # Regular Expression to remove Punctuation
 regExp4 = re.compile(r'[.,;_?()"/\']',re.DOTALL)
-# Regular Expression to remove [[file:]]
-regExp5 = re.compile(r'\[\[file:(.*?)\]\]',re.DOTALL)
-# Regular Expression to remove Brackets and other meta characters from title
-regExp6 = re.compile(r"[~`!@#$%-^*+{\[}\]\|\\<>/?]",re.DOTALL)
-# Regular Expression to remove <..> tags from text
-regExp10 = re.compile(r'<(.*?)>',re.DOTALL)
-# Regular Expression to remove junk from text
-regExp11 = re.compile(r"[~`!@#$%-^*+{\[}\]\|\\<>/?]",re.DOTALL)
 
 def cleanText(text):
     '''
     Use the Regular Expressions stored to remove unnecessary things from text for tokenizing
     '''
     text = text.lower()
-    text = regExp1.sub('',text)
-    text = regExp2.sub('',text)
-    text = regExp3.sub('',text)
     text = regExp4.sub(' ',text)
-    text = regExp5.sub('',text)
-    text = regExp10.sub('',text)
     text = re.sub(r'[^\x00-\x7F]+',' ', text)
     return text
 
+noDocs=0
 docNameMap = defaultdict(int)
-
-def readDocToName(path):
+def readDocToName():
     global docNameMap
+    global noDocs
+    path = "merged_index/docTitleMap.txt"
     with open(path, 'r') as file:
         lines = file.readlines()
         for line in lines:
             docID,t = line.split("#")
-            t = t.split(":")[0:-1]
-            name = ' '.join(t)
+            ind = t.rfind(":")
+            # t = t.split(":")[0:-1]
+            name = t[:ind]
             docNameMap[docID]=name
+            noDocs+=1
 
 def getName(docID):
     # print(docID," ",docNameMap[docID])
     return docNameMap[docID]
 
-def read_file(testfile):
-    with open(testfile, 'r') as file:
-        queries = file.readlines()
-    return queries
 
-
-def write_file(outputs, path_to_output):
-    '''outputs should be a list of lists.
-        len(outputs) = number of queries
-        Each element in outputs should be a list of titles corresponding to a particular query.'''
-    with open(path_to_output, 'w') as file:
-        for output in outputs:
-            for line in output:
-                file.write(line.strip() + '\n')
-            file.write('\n')
-
-invertedIndex = defaultdict(lambda:defaultdict(lambda:defaultdict(int)))
-def readIndexFromFile(path_to_index):
-    global invertedIndex
-    with open(path_to_index, "r") as f:
-        data = f.readlines()
-        for line in data:
-            word,rest = line.split("=")
-            doc_list = rest.split(",")
-            for d in doc_list:
-                docID, rest1 = d.split(":")
-                num = rest1.split("#")
-                for i in num:
-                    # print(i)
-                    category = i[0]
-                    freq = i[1:]
-                    # print(word+" "+docID+" "+category+" "+freq)
-                    invertedIndex[word][docID][category]=int(freq)
+secondaryIndex = list()
+def readSecondaryIndex():
+    try:
+        f = open("merged_index/secondary_index.txt","r")
+        for line in f:
+            secondaryIndex.append(line.split()[0])
+    except:
+        print( "Can't find the secondary index file in 'merged_index' Folder.")
+        print( "Re - run the program when the file is in the same folder.")
+        sys.exit(1)
 
 
 def parseQuery(query):
-    q = query
-    
     # try:
     isField = False
     if ":" in query and ("title" in query or "ref" in query or "category" in query or "body" in query or "link" in query or "infobox" in query):
@@ -110,8 +76,6 @@ def parseQuery(query):
         query = query.split()
         parsed_query = []
         for q in query:
-            if q[-1]=='\n':
-                q = q[0:-1]
             if ":" in q:
                 c,w = q.split(":")
                 w = cleanText(w)
@@ -122,7 +86,7 @@ def parseQuery(query):
                     parsed_query.append((w,"b")) 
             else:
                 q = cleanText(q)
-                q = ps.stem()
+                q = ps.stem(q)
                 parsed_query.append((q,"b"))
         return parsed_query,isField
     else:
@@ -130,41 +94,83 @@ def parseQuery(query):
         parsed_query = []
         query_words = query.split(" ")
         for word in query_words:
-            
-            if len(word)>1 and word[-1]=='\n':
-                word = word[0:-1]
             word = ps.stem(word)
             
             if stopwords[word]!=1 and len(word)>0:
                 parsed_query.append(word)
         return parsed_query, isField
-    # except:
-    #     q_t = query.split()
-    #     # t = []
-    #     # for i in q_t:
-    #     #     if ":" in i:
-    #     #         a,b = i.split(":")
-    #     #         if stopwords[a]!=1:
-    #     #             t.append(ps.stem(i))
-    #     #         if stopwords[b]!=1:
-    #     #             t.append(ps.stem(i))    
-    #     #     else:
-    #     #         if stopwords[i]!=1:
-    #     #             t.append(ps.stem(i))
-    #     # return t, False
+
+def binary_search(l, word):
+    lo = 0
+    hi = len(l)-1
+    while lo <= hi:
+        mid = int((lo + hi)/2)
+        t = l[mid].split("=")[0]
+        # print(t,word)
+        if t == word:
+            return mid
+        
+        elif t < word:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return lo
+
+weight = dict()
+weight["t"] = 1000
+weight["i"] = 50
+weight["r"] = 50
+weight["l"] = 50
+weight["c"] = 50
+weight["b"] = 1
 
 def normalSearch(query):
-    docToFreqMap = defaultdict(int) 
+    global weight
+    globalSearch = dict(list())
+    id_tfidf_map = defaultdict(int)
     for word in query:
+        loc = bisect(secondaryIndex,word)
+        startFlag = False
+        if loc-1 >= 0 and secondaryIndex[loc-1] == word:
+            startFlag = True
+            if loc-1 != 0:
+                loc -= 1
+            if loc+1 == len(secondaryIndex) and secondaryIndex[loc] == word:
+                loc += 1
+
+        primaryFile = "merged_index/index" + str(loc) + ".txt"
+        # print("opening primary file ",primaryFile)
+        file = open(primaryFile,"r")
+        data = file.read()
+        if startFlag:
+            startIndex = data.find(word+"=")
+        else:
+            startIndex = data.find("\n"+word+"=")
+        endIndex = data.find("\n",startIndex+1)
+        reqLine = data[startIndex:endIndex]
         # print(word)
-        d = invertedIndex[word]
-        # print(type(d))
-        for docID,rest in d.items():
-            # print(docID)
-            for category,freq in rest.items():
-                docToFreqMap[docID]+=freq
-                
-    docToFreqMap = sorted(docToFreqMap.items(), key=lambda item: item[1], reverse=True)[0:10]
+        # ind = binary_search(data,word)
+        # print("index ",ind)
+        # reqLine = data[ind]
+        # print("line read: ",reqLine.split("=")[0])
+        pl = reqLine.split("=")[1].split(",")
+        # print("posting list len: ",len(pl))
+        numDoc = len(pl)
+        idf = log10(noDocs/numDoc)
+
+        for d in pl:
+            docID, rest1 = d.split(":")
+            num = rest1.split("#")
+            tf = 0
+            for i in num:
+                category = i[0]
+                freq = i[1:]
+                tf += int(freq) * int(weight[category])
+                # tf += int(freq) 
+            
+            id_tfidf_map[docID] += float(log10(1+tf)) * float(idf)
+
+    docToFreqMap = sorted(id_tfidf_map.items(), key=lambda item: item[1], reverse=True)[0:10]
 
     result = []
 
@@ -172,23 +178,59 @@ def normalSearch(query):
         docID,freq = i
         # print(docID+" "+str(freq))
         result.append(getName(docID))
+        # print(getName(docID))
     
     return result
+        
+def printSearchResult(result):
+    for res in result:
+        print(res)
 
 def fieldSearch(query):
+    globalSearch = dict(list())
+    id_tfidf_map = defaultdict(int)
+    for word, cat in query:
+        loc = bisect(secondaryIndex,word)
+        startFlag = False
+        if loc-1 >= 0 and secondaryIndex[loc-1] == word:
+            startFlag = True
+            if loc-1 != 0:
+                loc -= 1
+            if loc+1 == len(secondaryIndex) and secondaryIndex[loc] == word:
+                loc += 1
 
-    docToFreqMap = defaultdict(int) 
-    for word,c in query:
-        # print(word)
-        d = invertedIndex[word]
-        # print(type(d))
-        for docID,rest in d.items():
-            # print(docID)
-            for category,freq in rest.items():
-                if category == c:
-                    docToFreqMap[docID]+=freq
-                
-    docToFreqMap = sorted(docToFreqMap.items(), key=lambda item: item[1], reverse=True)[0:10]
+        primaryFile = "merged_index/index" + str(loc) + ".txt"
+        file = open(primaryFile,"r")
+        data = file.readlines()
+        
+        ind = binary_search(data,word)
+        
+        reqLine = data[ind]
+
+        pl = reqLine.split("=")[1].split(",")
+        pl_updated = []
+        for i in pl:
+            if cat in i:
+                pl_updated.append(i)
+        if(len(pl_updated)<=0):
+            pl_updated = pl 
+        # print(pl_updated)
+        numDoc = len(pl_updated)
+        idf = log10(noDocs/numDoc)
+        
+        for d in pl_updated:
+            docID, rest1 = d.split(":")
+            num = rest1.split("#")
+            tf = 0
+            for i in num:
+                category = i[0]
+                freq = i[1:]
+                tf += int(freq) * int(weight[category])
+                # tf += int(freq) 
+            
+            id_tfidf_map[docID] += float(log10(1+tf)) * float(idf)
+
+    docToFreqMap = sorted(id_tfidf_map.items(), key=lambda item: item[1], reverse=True)[0:10]
 
     result = []
 
@@ -196,49 +238,48 @@ def fieldSearch(query):
         docID,freq = i
         # print(docID+" "+str(freq))
         result.append(getName(docID))
+        # print(getName(docID))
     
     return result
 
-def searchOne(query):
-    query, isField = parseQuery(query)
-    # print(query)
-    result = []
-    if isField:
-        result = fieldSearch(query)
+print()
+print("reading secondary index")
+readSecondaryIndex()
+print("Done...!")
+print()
+print("reading doc name map")
+readDocToName()
+print("Done...!")
+print()
+
+while True:
+    print()
+    query = input("Enter your query: ")
+    print()
+    start = timeit.default_timer()
+    queryWords, isField = parseQuery(query)
+    # print(queryWords)
+    if not isField:
+        try:
+            result = normalSearch(queryWords)
+            stop = timeit.default_timer()
+            printSearchResult(result)
+            print()
+            print( "Query Took ",stop-start," seconds.")
+            print()
+            print()
+        except Exception as e:
+            print( "Some Error Occurred! Try Again")
+            print(e)
     else:
-        result = normalSearch(query)
-
-    # print(result)
-    return result
-
-def getResults(queries):
-    results = []
-    for query in queries:
-        result = searchOne(query)
-        # print(result)
-        results.append(result)
-    return results
-
-def search(path_to_index, queries):
-    '''Write your code here'''
-    indexFile = path_to_index+"/index.txt"
-    readIndexFromFile(indexFile)
-    # print(invertedIndex)
-    docTitleFile = path_to_index+"/docTitleMap.txt"
-    readDocToName(docTitleFile)
-    results = getResults(queries)
-    # print(results)
-    return results
-
-def main():
-    path_to_index = sys.argv[1]
-    testfile = sys.argv[2]
-    path_to_output = sys.argv[3]
-    queries = read_file(testfile)
-    outputs = search(path_to_index, queries)
-    write_file(outputs, path_to_output)
-
-
-if __name__ == '__main__':
-    main()
-
+        try:
+            result = fieldSearch(queryWords)
+            stop = timeit.default_timer()
+            printSearchResult(result)
+            print()
+            print( "Query Took ",stop-start," seconds.")
+            print()
+            print()
+        except Exception as e:
+            print( "Some Error Occurred! Try Again")
+            print(e)
