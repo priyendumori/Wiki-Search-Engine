@@ -38,8 +38,9 @@ def readDocToName():
         lines = file.readlines()
         for line in lines:
             docID,t = line.split("#")
-            t = t.split(":")[0:-1]
-            name = ' '.join(t)
+            ind = t.rfind(":")
+            # t = t.split(":")[0:-1]
+            name = t[:ind]
             docNameMap[docID]=name
             noDocs+=1
 
@@ -115,8 +116,18 @@ def binary_search(l, word):
             hi = mid - 1
     return lo
 
+weight = dict()
+weight["t"] = 1000
+weight["i"] = 50
+weight["r"] = 50
+weight["l"] = 50
+weight["c"] = 50
+weight["b"] = 1
+
 def normalSearch(query):
+    global weight
     globalSearch = dict(list())
+    id_tfidf_map = defaultdict(int)
     for word in query:
         loc = bisect(secondaryIndex,word)
         startFlag = False
@@ -130,76 +141,54 @@ def normalSearch(query):
         primaryFile = "merged_index/index" + str(loc) + ".txt"
         # print("opening primary file ",primaryFile)
         file = open(primaryFile,"r")
-        data = file.readlines()
-        # if startFlag:
-        #     startIndex = data.find(word+"=")
-        # else:
-        #     startIndex = data.find("\n"+word+"=")
-        # endIndex = data.find("\n",startIndex+1)
-        # reqLine = data[startIndex:endIndex]
+        data = file.read()
+        if startFlag:
+            startIndex = data.find(word+"=")
+        else:
+            startIndex = data.find("\n"+word+"=")
+        endIndex = data.find("\n",startIndex+1)
+        reqLine = data[startIndex:endIndex]
         # print(word)
-        ind = binary_search(data,word)
+        # ind = binary_search(data,word)
         # print("index ",ind)
-        reqLine = data[ind]
+        # reqLine = data[ind]
         # print("line read: ",reqLine.split("=")[0])
         pl = reqLine.split("=")[1].split(",")
         # print("posting list len: ",len(pl))
         numDoc = len(pl)
         idf = log10(noDocs/numDoc)
-        for i in pl:
-            docID, entry = i.split(":")
-            if docID in globalSearch:
-                globalSearch[docID].append(entry+"_"+str(idf))
-            else:
-                globalSearch[docID] = [entry+"_"+str(idf)]
-    lengthFreq = dict(dict())
-    regEx = re.compile(r'(\d+|\s+)')
-    for k in globalSearch:
-        weightedFreq = 0
-        n = len(globalSearch[k])
-        for x in globalSearch[k]:
-            x,idf = x.split("_")
-            x = x.split("#")
-            for y in x:
-                lis = regEx.split(y)
-                tagType, freq = lis[0], lis[1]
-                if tagType == "t":
-                    weightedFreq += int(freq)*1000
-                elif tagType == "i" or tagType == "c" or tagType == "r" or tagType == "e":
-                    weightedFreq += int(freq)*50
-                elif tagType == "b":
-                    weightedFreq += int(freq)
-        if n in lengthFreq:
-            lengthFreq[n][k] = float(log10(1+weightedFreq))*float(idf)
-        else:
-            lengthFreq[n] = {k : float(log10(1+weightedFreq))*float(idf)}
-    count = 0
-    flag = False
-    # resultList = []
+
+        for d in pl:
+            docID, rest1 = d.split(":")
+            num = rest1.split("#")
+            tf = 0
+            for i in num:
+                category = i[0]
+                freq = i[1:]
+                tf += int(freq) * int(weight[category])
+                # tf += int(freq) 
+            
+            id_tfidf_map[docID] += float(log10(1+tf)) * float(idf)
+
+    docToFreqMap = sorted(id_tfidf_map.items(), key=lambda item: item[1], reverse=True)[0:10]
+
+    result = []
+
+    for i in docToFreqMap:
+        docID,freq = i
+        # print(docID+" "+str(freq))
+        result.append(getName(docID))
+        # print(getName(docID))
     
-    K = 10
-    # lii = heapq.nlargest(K,lengthFreq.items(), key=itemgetter(0))
-    # count = 1
-    # print(type(lengthFreq))
-    for k,v in sorted(lengthFreq.items(),reverse=True):
-        # print(count)
-        # count+=1
-        # print(k)
-        # print(type(v))
-        # print(v)
-        for k1,v1 in sorted(v.items(),key=itemgetter(1),reverse=True):
-            # print(k1,v1)
-            print (docNameMap[k1])
-            count += 1
-            if count == K:
-                flag = True
-                break
-        if flag:
-            break
-        # print()
+    return result
+        
+def printSearchResult(result):
+    for res in result:
+        print(res)
 
 def fieldSearch(query):
     globalSearch = dict(list())
+    id_tfidf_map = defaultdict(int)
     for word, cat in query:
         loc = bisect(secondaryIndex,word)
         startFlag = False
@@ -225,71 +214,33 @@ def fieldSearch(query):
                 pl_updated.append(i)
         if(len(pl_updated)<=0):
             pl_updated = pl 
-
         # print(pl_updated)
         numDoc = len(pl_updated)
         idf = log10(noDocs/numDoc)
-        for i in pl_updated:
-            docID, entry = i.split(":")
-            if docID in globalSearch:
-                globalSearch[docID].append(entry+"_"+str(idf))
-            else:
-                globalSearch[docID] = [entry+"_"+str(idf)]
-    lengthFreq = dict(dict())
-    regEx = re.compile(r'(\d+|\s+)')
-    for k in globalSearch:
-        weightedFreq = 0
-        n = len(globalSearch[k])
-        for x in globalSearch[k]:
-            x,idf = x.split("_")
-            x = x.split("#")
-            for y in x:
-                lis = regEx.split(y)
-                tagType, freq = lis[0], lis[1]
-                if tagType == "t":
-                    if cat == "t":
-                        weightedFreq += int(freq)*1000
-                    else:
-                        weightedFreq += int(freq)
-                elif tagType == "i":
-                    if cat == "i":
-                        weightedFreq += int(freq)*50
-                    else:
-                        weightedFreq += int(freq)
-                elif tagType == "c":
-                    if cat == "c":
-                        weightedFreq += int(freq)*50
-                    else:
-                        weightedFreq += int(freq)
-                elif tagType == "r":
-                    if cat == "r":
-                        weightedFreq += int(freq)*50
-                    else:
-                        weightedFreq += int(freq)
-                elif tagType == "e":
-                    if cat == "e":
-                        weightedFreq += int(freq)*50
-                    else:
-                        weightedFreq += int(freq)
-                elif tagType == "b":
-                    weightedFreq += int(freq)
-        if n in lengthFreq:
-            lengthFreq[n][k] = float(log10(1+weightedFreq))*float(idf)
-        else:
-            lengthFreq[n] = {k : float(log10(1+weightedFreq))*float(idf)}
-    count = 0
-    flag = False
+        
+        for d in pl_updated:
+            docID, rest1 = d.split(":")
+            num = rest1.split("#")
+            tf = 0
+            for i in num:
+                category = i[0]
+                freq = i[1:]
+                tf += int(freq) * int(weight[category])
+                # tf += int(freq) 
+            
+            id_tfidf_map[docID] += float(log10(1+tf)) * float(idf)
+
+    docToFreqMap = sorted(id_tfidf_map.items(), key=lambda item: item[1], reverse=True)[0:10]
+
+    result = []
+
+    for i in docToFreqMap:
+        docID,freq = i
+        # print(docID+" "+str(freq))
+        result.append(getName(docID))
+        # print(getName(docID))
     
-    K = 10
-    for k,v in sorted(lengthFreq.items(),reverse=True):
-        for k1,v1 in sorted(v.items(),key=itemgetter(1),reverse=True):
-            print (docNameMap[k1])
-            count += 1
-            if count == K:
-                flag = True
-                break
-        if flag:
-            break
+    return result
 
 print()
 print("reading secondary index")
@@ -310,8 +261,9 @@ while True:
     # print(queryWords)
     if not isField:
         try:
-            normalSearch(queryWords)
+            result = normalSearch(queryWords)
             stop = timeit.default_timer()
+            printSearchResult(result)
             print()
             print( "Query Took ",stop-start," seconds.")
             print()
@@ -321,8 +273,9 @@ while True:
             print(e)
     else:
         try:
-            fieldSearch(queryWords)
+            result = fieldSearch(queryWords)
             stop = timeit.default_timer()
+            printSearchResult(result)
             print()
             print( "Query Took ",stop-start," seconds.")
             print()
